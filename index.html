@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Phòng Không Thủ Thành - Heavy Gunner Edition</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #0b0914;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            touch-action: none; 
+        }
+        canvas {
+            background: linear-gradient(to bottom, #070a12, #0f0e21);
+            border: 3px solid #3b82f6;
+            box-shadow: 0 0 30px rgba(59, 130, 246, 0.4);
+            cursor: none; 
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="defenseCanvas" width="450" height="700"></canvas>
+
+<script>
+const canvas = document.getElementById("defenseCanvas");
+const ctx = canvas.getContext("2d");
+
+// --- CẤU HÌNH NHÂN VẬT & CHỈ SỐ NÂNG CẤP ---
+const castle = {
+    height: 50,
+    color: '#475569',
+    hp: 100,
+    maxHp: 100
+};
+
+const gun = {
+    x: canvas.width / 2, 
+    y: canvas.height - castle.height,
+    length: 45,
+    color: '#3b82f6',
+    bulletRadius: 4,     
+    fireRate: 160,       
+    multishot: 1,
+    damage: 5 // TĂNG MẠNH SÁT THƯƠNG GỐC: Từ 1 lên 5 sát thương mỗi viên đạn
+};
+
+// Hệ thống Cấp độ (Level & EXP)
+let playerLevel = 1;
+let playerExp = 0;
+let expNeeded = 50; 
+
+// Trạng thái game
+let score = 0;
+let gameOver = false;
+let isUpgradeScreen = false; 
+let upgradeOptions = [];     
+
+// Hệ thống điểm cao
+let highscore = localStorage.getItem("castle_defense_highscore") ? parseInt(localStorage.getItem("castle_defense_highscore")) : 0;
+let isNewRecord = false; 
+
+let bullets = [];
+let enemies = [];
+let expGems = [];  
+let damageNumbers = []; // Mảng quản lý các con số sát thương nhảy lên màn hình
+
+// GIẢM SỐ QUÁI: Tăng spawnRate gốc lên 100 (Quái ra chậm hơn, thưa hơn nhiều)
+let spawnRate = 100; 
+let frameCount = 0;
+let lastShotTime = 0;
+let crosshair = { x: canvas.width / 2, y: canvas.height / 2 - 100 };
+
+// --- ĐIỀU KHIỂN ---
+function updateCrosshairPos(clientX, clientY) {
+    if (isUpgradeScreen) return; 
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    
+    crosshair.x = (clientX - rect.left) * scaleX;
+    crosshair.y = (clientY - rect.top) * scaleY;
+    if (crosshair.y > gun.y - 10) crosshair.y = gun.y - 10;
+}
+
+canvas.addEventListener('mousemove', (e) => {
+    updateCrosshairPos(e.clientX, e.clientY);
+});
+
+canvas.addEventListener('mousedown', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const clickX = (e.clientX - rect.left) * scaleX;
+    const clickY = (e.clientY - rect.top) * scaleY;
+
+    if (gameOver) {
+        resetGame();
+        return;
+    }
+
+    if (isUpgradeScreen) {
+        upgradeOptions.forEach(opt => {
+            if (clickX >= opt.x && clickX <= opt.x + opt.w &&
+                clickY >= opt.y && clickY <= opt.y + opt.h) {
+                opt.action(); 
+                isUpgradeScreen = false;
+                gameLoop();
+            }
+        });
+    }
+});
+
+canvas.addEventListener('touchstart', (e) => {
+    updateCrosshairPos(e.touches[0].clientX, e.touches[0].clientY);
+});
+canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    updateCrosshairPos(e.touches[0].clientX, e.touches[0].clientY);
+});
+
+function resetGame() {
+    castle.hp = 100;
+    castle.maxHp = 100;
+    gun.bulletRadius = 4;
+    gun.fireRate = 160;
+    gun.multishot = 1;
+    gun.damage = 5; // Reset sát thương
+    playerLevel = 1;
+    playerExp = 0;
+    expNeeded = 50;
+    score = 0;
+    bullets = [];
+    enemies = [];
+    expGems = [];
+    damageNumbers = [];
+    spawnRate = 100; // Reset số quái ra chậm
+    frameCount = 0;
+    gameOver = false;
+    isUpgradeScreen = false;
+    isNewRecord = false; 
+    crosshair = { x: canvas.width / 2, y: canvas.height / 2 - 100 };
+    gameLoop();
+}
+
+// --- HỆ THỐNG LIÊN THANH ---
+function autoShoot() {
+    if (isUpgradeScreen) return;
+    const currentTime = Date.now();
+    if (currentTime - lastShotTime > gun.fireRate) {
+        const angle = Math.atan2(crosshair.y - gun.y, crosshair.x - gun.x);
+        
+        if (gun.multishot === 1) {
+            createBullet(angle);
+        } else if (gun.multishot === 2) {
+            createBullet(angle - 0.1); 
+            createBullet(angle + 0.1); 
+        } else {
+            createBullet(angle - 0.18); 
+            createBullet(angle);       
+            createBullet(angle + 0.18); 
+        }
+        lastShotTime = currentTime;
+    }
+}
+
+function createBullet(angle) {
+    bullets.push({
+        x: gun.x,
+        y: gun.y,
+        radius: gun.bulletRadius,
+        color: '#f59e0b',
+        velocity: { x: Math.cos(angle) * 12, y: Math.sin(angle) * 12 }
+    });
+}
+
+function spawnEnemy() {
+    const isBig = Math.random() < 0.2; // Tăng tỉ lệ quái to lên chút vì đạn mình mạnh rồi
+    const maxHp = isBig ? Math.floor(Math.random() * 21) + 30  
+                        : Math.floor(Math.random() * 11) + 10; 
+
+    enemies.push({
+        x: Math.random() * (canvas.width - 40) + 20,
+        y: -20,
+        radius: isBig ? 22 : 13,
+        color: isBig ? '#e11d48' : '#ef4444',
+        speed: isBig ? 0.7 : 1.2, 
+        hp: maxHp,
+        maxHp: maxHp
+    });
+}
+
+function checkLevelUp() {
+    if (playerExp >= expNeeded) {
+        playerExp -= expNeeded;
+        playerLevel++;
+        expNeeded = Math.floor(expNeeded * 1.5); 
+        isUpgradeScreen = true;
+
+        const allUpgrades = [
+            { title: "ĐẠN THỦNG GIÁP", desc: "Tăng mạnh Sát thương +4", action: () => { gun.damage += 4; } }, // THÊM THẺ TĂNG ST
+            { title: "TỐC ĐỘ BẮN", desc: "Xả đạn nhanh hơn 20%", action: () => { gun.fireRate = Math.max(50, gun.fireRate - 25); } },
+            { title: "ĐẠN SIÊU CẤP", desc: "Kích thước đạn +2 pixel", action: () => { gun.bulletRadius += 2; } },
+            { title: "SỬA THÀNH TRÌ", desc: "Hồi lại 40 HP cho thành", action: () => { castle.hp = Math.min(castle.maxHp, castle.hp + 40); } },
+            { title: "SÚNG BẮN LAN", desc: "Tăng số lượng tia (Max 3)", action: () => { gun.multishot = Math.min(3, gun.multishot + 1); } }
+        ];
+
+        allUpgrades.sort(() => Math.random() - 0.5);
+        upgradeOptions = allUpgrades.slice(0, 3);
+
+        const cardW = 280, cardH = 85, gap = 15;
+        let startY = canvas.height / 2 - 120;
+
+        upgradeOptions.forEach((opt, index) => {
+            opt.x = (canvas.width - cardW) / 2;
+            opt.y = startY + index * (cardH + gap);
+            opt.w = cardW;
+            opt.h = cardH;
+        });
+    }
+}
+
+// --- VÒNG LẶP GAME CHÍNH ---
+function gameLoop() {
+    if (gameOver) return;
+
+    if (isUpgradeScreen) {
+        drawUpgradeScreen();
+        return; 
+    }
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    autoShoot();
+
+    // A. VẼ THÀNH TRÌ & SÚNG MÁY
+    ctx.fillStyle = castle.color;
+    ctx.fillRect(0, canvas.height - castle.height, canvas.width, castle.height);
+
+    const gunAngle = Math.atan2(crosshair.y - gun.y, crosshair.x - gun.x);
+    ctx.beginPath();
+    ctx.lineWidth = 10 + (gun.bulletRadius / 2); 
+    ctx.strokeStyle = gun.color;
+    ctx.lineCap = "round";
+    ctx.moveTo(gun.x, gun.y);
+    ctx.lineTo(gun.x + Math.cos(gunAngle) * gun.length, gun.y + Math.sin(gunAngle) * gun.length);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(gun.x, gun.y, 20, Math.PI, 0);
+    ctx.fillStyle = '#1e3a8a';
+    ctx.fill();
+
+    // B. XỬ LÝ ĐẠN
+    for (let i = bullets.length - 1; i >= 0; i--) {
+        let b = bullets[i];
+        b.x += b.velocity.x; b.y += b.velocity.y;
+
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+        ctx.fillStyle = b.color;
+        ctx.fill();
+
+        if (b.x < 0 || b.x > canvas.width || b.y < 0 || b.y > canvas.height) {
+            bullets.splice(i, 1);
+        }
+    }
+
+    // C. XỬ LÝ VIÊN EXP (XANH LÁ CÂY)
+    for (let i = expGems.length - 1; i >= 0; i--) {
+        let g = expGems[i];
+        g.y += 1.8; 
+
+        ctx.beginPath();
+        ctx.fillStyle = '#22c55e'; 
+        ctx.shadowBlur = 10;        
+        ctx.shadowColor = '#22c55e';
+        ctx.arc(g.x, g.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0; 
+
+        if (g.y >= canvas.height - castle.height) {
+            playerExp += g.amount;
+            expGems.splice(i, 1);
+            checkLevelUp(); 
+        }
+    }
+
+    // D. XỬ LÝ QUÁI VẬT (QUÁI THƯA + ĂN SÁT THƯƠNG LỚN)
+    frameCount++;
+    if (frameCount % spawnRate === 0) {
+        spawnEnemy();
+        // Quái ra thưa hơn nhưng vẫn tăng nhẹ tốc độ theo thời gian để giữ độ thử thách
+        if (spawnRate > 35) spawnRate -= 1; 
+    }
+
+    for (let i = enemies.length - 1; i >= 0; i--) {
+        let e = enemies[i];
+        e.y += e.speed;
+
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, e.radius, 0, Math.PI * 2);
+        ctx.fillStyle = e.color;
+        ctx.fill();
+
+        // Thanh máu mini
+        const barW = e.radius * 2;
+        const barH = 4;
+        const barX = e.x - e.radius;
+        const barY = e.y - e.radius - 8;
+        
+        ctx.fillStyle = '#334155'; 
+        ctx.fillRect(barX, barY, barW, barH);
+        ctx.fillStyle = '#ef4444'; 
+        ctx.fillRect(barX, barY, Math.max(0, (e.hp / e.maxHp)) * barW, barH);
+
+        // Quái chạm thành
+        if (e.y + e.radius >= canvas.height - castle.height) {
+            castle.hp -= (e.radius > 15) ? 20 : 10;
+            enemies.splice(i, 1);
+            if (castle.hp <= 0) { 
+                castle.hp = 0; 
+                handleGameOver(); 
+            }
+            continue;
+        }
+
+        // Đạn bắn trúng quái
+        for (let j = bullets.length - 1; j >= 0; j--) {
+            let b = bullets[j];
+            let dist = Math.hypot(b.x - e.x, b.y - e.y);
+
+            if (dist < b.radius + e.radius) {
+                bullets.splice(j, 1); 
+                
+                // Trừ máu theo Sát thương hiện tại của Súng máy
+                e.hp -= gun.damage;               
+
+                // Thêm số hiệu ứng nhảy sát thương lên màn hình
+                damageNumbers.push({
+                    x: e.x + (Math.random() * 20 - 10),
+                    y: e.y - 10,
+                    text: gun.damage,
+                    alpha: 1,
+                    life: 30 // Tồn tại trong 30 frame
+                });
+
+                if (e.hp <= 0) {
+                    expGems.push({ x: e.x, y: e.y, amount: e.maxHp });
+                    enemies.splice(i, 1);
+                    score += e.maxHp * 2; 
+                }
+                break;
+            }
+        }
+    }
+
+    // E. VẼ VÀ CẬP NHẬT SỐ SÁT THƯƠNG NHẢY LÊN
+    for (let i = damageNumbers.length - 1; i >= 0; i--) {
+        let d = damageNumbers[i];
+        d.y -= 0.8; // Bay lên trên
+        d.alpha -= 1 / d.life; // Mờ dần
+
+        ctx.fillStyle = `rgba(245, 158, 11, ${d.alpha})`; // Màu cam rực
+        ctx.font = "bold 15px Arial";
+        ctx.fillText(d.text, d.x, d.y);
+
+        if (d.alpha <= 0) {
+            damageNumbers.splice(i, 1);
+        }
+    }
+
+    // F. VẼ TÂM NGẮM
+    ctx.strokeStyle = isUpgradeScreen ? 'transparent' : '#10b981';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(crosshair.x, crosshair.y, 12, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(crosshair.x - 18, crosshair.y); ctx.lineTo(crosshair.x + 18, crosshair.y);
+    ctx.moveTo(crosshair.x, crosshair.y - 18); ctx.lineTo(crosshair.x, crosshair.y + 18);
+    ctx.stroke();
+
+    // G. GIAO DIỆN CHỈ SỐ
+    ctx.fillStyle = "white";
+    ctx.font = "bold 14px Arial";
+    ctx.fillText("SCORE: " + score, 15, 25);
+    ctx.fillText("LV. " + playerLevel, 15, 48);
+    
+    // Hiển thị thêm chỉ số sát thương hiện tại của súng
+    ctx.fillStyle = "#fbbf24";
+    ctx.fillText("DMG: " + gun.damage, 15, 70);
+
+    // Vẽ điểm cao nhất ở góc phải
+    ctx.fillStyle = "#a1a1aa";
+    ctx.textAlign = "right";
+    ctx.fillText("BEST: " + Math.max(highscore, score), canvas.width - 15, 25);
+    ctx.textAlign = "left"; 
+
+    // Vẽ Thanh Máu
+    ctx.fillStyle = "#334155"; ctx.fillRect(100, 14, 120, 12);
+    ctx.fillStyle = castle.hp > 30 ? "#10b981" : "#ef4444";
+    ctx.fillRect(100, 14, (castle.hp / castle.maxHp) * 120, 12);
+    
+    // Vẽ Thanh EXP
+    ctx.fillStyle = "#334155"; ctx.fillRect(100, 38, 120, 8);
+    ctx.fillStyle = "#3b82f6";
+    ctx.fillRect(100, 38, Math.min(120, (playerExp / expNeeded) * 120), 8);
+
+    if (gameOver) {
+        drawGameOverScreen();
+        return;
+    }
+
+    requestAnimationFrame(gameLoop);
+}
+
+function handleGameOver() {
+    gameOver = true;
+    if (score > highscore) {
+        highscore = score;
+        localStorage.setItem("castle_defense_highscore", highscore); 
+        isNewRecord = true;
+    }
+}
+
+function drawGameOverScreen() {
+    ctx.fillStyle = "rgba(0, 0, 0, 0.9)"; 
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    ctx.fillStyle = "#ef4444"; 
+    ctx.font = "bold 32px Arial"; 
+    ctx.textAlign = "center";
+    ctx.fillText("THÀNH TRÌ SỤP ĐỔ!", canvas.width / 2, canvas.height / 2 - 60);
+    
+    ctx.fillStyle = "white"; 
+    ctx.font = "18px Arial";
+    ctx.fillText("Cấp độ đạt được: Lv." + playerLevel, canvas.width / 2, canvas.height / 2 - 10);
+    ctx.fillText("Điểm số lượt này: " + score, canvas.width / 2, canvas.height / 2 + 20);
+    
+    if (isNewRecord) {
+        ctx.fillStyle = Math.floor(Date.now() / 250) % 2 === 0 ? "#f59e0b" : "#fef08a";
+        ctx.font = "bold 20px Arial";
+        ctx.fillText("★ KỶ LỤC MỚI KHỦNG KHIẾP! ★", canvas.width / 2, canvas.height / 2 + 60);
+    } else {
+        ctx.fillStyle = "#a1a1aa";
+        ctx.fillText("Kỷ lục cũ của bạn: " + highscore, canvas.width / 2, canvas.height / 2 + 60);
+    }
+    
+    ctx.fillStyle = "#3b82f6"; 
+    ctx.font = "bold 16px Arial";
+    ctx.fillText("Chạm màn hình để CHƠI LẠI", canvas.width / 2, canvas.height / 2 + 120);
+    ctx.textAlign = "left";
+}
+
+function drawUpgradeScreen() {
+    canvas.style.cursor = "default";
+    ctx.fillStyle = "rgba(11, 9, 20, 0.85)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = "#f59e0b";
+    ctx.font = "bold 26px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText("THĂNG CẤP! CHỌN KỸ NĂNG", canvas.width / 2, canvas.height / 2 - 160);
+
+    upgradeOptions.forEach(opt => {
+        ctx.fillStyle = "#1e1b4b";
+        ctx.strokeStyle = "#6366f1";
+        ctx.lineWidth = 2;
+        ctx.fillRect(opt.x, opt.y, opt.w, opt.h);
+        ctx.strokeRect(opt.x, opt.y, opt.w, opt.h);
+
+        ctx.fillStyle = "#67e8f9";
+        ctx.font = "bold 16px Arial";
+        ctx.fillText(opt.title, opt.x + opt.w / 2, opt.y + 30);
+
+        ctx.fillStyle = "#e2e8f0";
+        ctx.font = "13px Arial";
+        ctx.fillText(opt.desc, opt.x + opt.w / 2, opt.y + 60);
+    });
+
+    ctx.textAlign = "left";
+    canvas.style.cursor = "none";
+}
+
+gameLoop();
+</script>
+</body>
+</html>
